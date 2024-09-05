@@ -49,9 +49,8 @@ def distortion_factors():
 
 
 ### STEP 2: Distortion Correction ###
-def warp(img, mtx, dist):
-    undist = cv2.undistort(img, mtx, dist, None, mtx)
-    img_size = (img.shape[1], img.shape[0])
+def warp(undist_img):
+    img_size = (undist_img.shape[1], undist_img.shape[0])
     offset = 300
     
     # Source points taken from images with straight lane lines, these are to become parallel after the warp transform
@@ -71,15 +70,15 @@ def warp(img, mtx, dist):
     # Calculate the transformation matrix and it's inverse transformation
     M = cv2.getPerspectiveTransform(src, dst)
     M_inv = cv2.getPerspectiveTransform(dst, src)
-    warped = cv2.warpPerspective(undist, M, img_size)
+    warped = cv2.warpPerspective(undist_img, M, img_size)
    
     return warped, M_inv
 
 
 ### STEP 3: Color and Gradient Threshold ###
-def binary_thresholded(img):
+def binary_thresholded(undist_img):
     # Transform image to gray scale
-    gray_img =cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray_img =cv2.cvtColor(undist_img, cv2.COLOR_BGR2GRAY)
     # Apply sobel (derivative) in x direction, this is usefull to detect lines that tend to be vertical
     sobelx = cv2.Sobel(gray_img, cv2.CV_64F, 1, 0)
     abs_sobelx = np.absolute(sobelx)
@@ -94,7 +93,7 @@ def binary_thresholded(img):
     white_binary[(gray_img > 200) & (gray_img <= 255)] = 1
 
     # Convert image to HLS
-    hls = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
+    hls = cv2.cvtColor(undist_img, cv2.COLOR_BGR2HLS)
     H = hls[:,:,0]
     S = hls[:,:,2]
     sat_binary = np.zeros_like(S)
@@ -227,8 +226,8 @@ def draw_poly_lines(binary_warped, left_fitx, right_fitx, ploty):
     right_line_pts = np.hstack((right_line_window1, right_line_window2))
 
     # Draw the lane onto the warped blank image
-    cv2.fillPoly(window_img, int_([left_line_pts]), (100, 100, 0))
-    cv2.fillPoly(window_img, int_([right_line_pts]), (100, 100, 0))
+    cv2.fillPoly(window_img, int([left_line_pts]), (100, 100, 0))
+    cv2.fillPoly(window_img, int([right_line_pts]), (100, 100, 0))
     result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)
     
     # Plot the polynomial lines onto the image
@@ -321,22 +320,18 @@ def project_lane_info(img, binary_warped, ploty, left_fitx, right_fitx, M_inv, v
     # Combine the result with the original image
     out_img = cv2.addWeighted(img, 1, newwarp, 0.3, 0)
     
-    cv2.putText(out_img,'Curve Radius [m]: '+str((left_curverad+right_curverad)/2)[:7],(40,70), cv2.FONT_HERSHEY_COMPLEX_SMALL, 1.6, (255,255,255),2,cv2.LINE_AA)
-    cv2.putText(out_img,'Center Offset [m]: '+str(veh_pos)[:7],(40,150), cv2.FONT_HERSHEY_COMPLEX_SMALL, 1.6,(255,255,255),2,cv2.LINE_AA)
+    cv2.putText(img,'Curve Radius [m]: '+str((left_curverad+right_curverad)/2)[:7],(40,70), cv2.FONT_HERSHEY_COMPLEX_SMALL, 1.6, (255,255,255),2,cv2.LINE_AA)
+    cv2.putText(img,'Center Offset [m]: '+str(veh_pos)[:7],(40,150), cv2.FONT_HERSHEY_COMPLEX_SMALL, 1.6,(255,255,255),2,cv2.LINE_AA)
     
-    return out_img
+    return img
 
 
 ### STEP 8: Lane Finding Pipeline on Video ###
 
-def lane_finding_pipeline(img, left_fit_hist, right_fit_hist):
+def lane_finding_pipeline(undistored_img, binary_warped, left_fit_hist, right_fit_hist, M_inv):
     global prev_left_fit
     global prev_right_fit
     
-    binary_thresh = binary_thresholded(img)
-    mtx, dist = np.load('camera_matrix.npy'), np.load('distortion_coefficients.npy')
-    binary_warped, M_inv = warp(binary_thresh, mtx, dist)
-    #out_img = np.dstack((binary_thresh, binary_thresh, binary_thresh))*255
     if (len(left_fit_hist) == 0):
         leftx, lefty, rightx, righty = find_lane_pixels_using_histogram(binary_warped)
         left_fit, right_fit, left_fitx, right_fitx, ploty = fit_poly(binary_warped,leftx, lefty, rightx, righty)
@@ -369,15 +364,13 @@ def lane_finding_pipeline(img, left_fit_hist, right_fit_hist):
     left_curverad, right_curverad =  measure_curvature_meters(binary_warped, left_fitx, right_fitx, ploty)
                                      #measure_curvature_meters(binary_warped, left_fitx, right_fitx, ploty)
     veh_pos = measure_position_meters(binary_warped, left_fit, right_fit) 
-    out_img = project_lane_info(img, binary_warped, ploty, left_fitx, right_fitx, M_inv, veh_pos, left_curverad, right_curverad)
+    out_img = project_lane_info(undistored_img, binary_warped, ploty, left_fitx, right_fitx, M_inv, veh_pos, left_curverad, right_curverad)
     return out_img
 
 
-import numpy as np
-
 def calculate_angle_between_lines(line1_slope, line2_slope):
     # Calculate the angle between two lines using the arctangent of the slope difference
-    tan_angle_diff = np.abs((line1_slope - line2_slope) / (1 + line1_slope * line2_slope))
+    tan_angle_diff = (line1_slope - line2_slope) / (1 + line1_slope * line2_slope)
     angle_diff = np.arctan(tan_angle_diff)
     return np.degrees(angle_diff)
 
@@ -396,12 +389,12 @@ def find_angle_difference(binary_warped, left_fit, right_fit):
     angle_centerline_rad = np.arctan(centerline_slope)
     angle_centerline_deg = np.degrees(angle_centerline_rad)
     
-    #angle_difference = calculate_angle_between_lines(centerline_slope, 0)
+    angle_difference = calculate_angle_between_lines(centerline_slope, 0)
     
-    return angle_centerline_deg, centerline_slope, center_x
+    return angle_centerline_deg, angle_difference, center_x
 
 
-def draw_arrows_with_angle(img, center_x, angle_centerline_deg, color_centerline=(0, 255, 0), color_camera=(255, 0, 0)):
+def draw_arrows_with_angle(undistored_img, center_x, angle_centerline_deg, color_centerline=(0, 255, 0), color_camera=(255, 0, 0)):
     """
     Draws arrows representing the camera's looking direction and the centerline direction, with angles.
     
@@ -415,17 +408,17 @@ def draw_arrows_with_angle(img, center_x, angle_centerline_deg, color_centerline
     Returns:
         img_with_arrows: Image with the arrows drawn
     """
-    img_height, img_width = img.shape[:2]
+    img_height, img_width = undistored_img.shape[:2]
     
     # Camera direction is vertical from the bottom center (angle 0 degrees)
     camera_start = (img_width // 2, img_height)
     camera_end = (img_width // 2, img_height - 100)  # Fixed vertical direction
     
     # Draw the camera direction arrow (red, angle 0)
-    img_with_arrows = cv2.arrowedLine(img, camera_start, camera_end, color_camera, 5, tipLength=0.3)
+    img_with_arrows = cv2.arrowedLine(undistored_img, camera_start, camera_end, color_camera, 3, tipLength=0.3)
     
     # Compute the end point for the centerline arrow based on the angle
-    centerline_start = camera_start #(int(center_x), img_height)
+    centerline_start = (int(center_x), img_height)
     
     # Length of the arrow in pixels (e.g., 100 px long)
     arrow_length = 100
@@ -436,12 +429,12 @@ def draw_arrows_with_angle(img, center_x, angle_centerline_deg, color_centerline
     centerline_end_y = int(img_height - arrow_length * np.cos(angle_radians))
     
     # Draw the centerline arrow (green)
-    img_with_arrows = cv2.arrowedLine(img_with_arrows, centerline_start, (centerline_end_x, centerline_end_y), color_centerline, 5, tipLength=0.3)
+    img_with_arrows = cv2.arrowedLine(img_with_arrows, centerline_start, (centerline_end_x, centerline_end_y), color_centerline, 3, tipLength=0.3)
     
     return img_with_arrows
 
 
-def process_image(img):
+def process_image(img, left_fit_hist, right_fit_hist):
     """
     Processes an image to find the lane lines and calculate the angle difference.
     
@@ -455,20 +448,31 @@ def process_image(img):
     """
     # Step 1: Undistort the image
     mtx, dist = np.load('camera_matrix.npy'), np.load('distortion_coefficients.npy')
-    #undistorted_img = cv2.undistort(img, mtx, dist, None, mtx)
-    binary_thresh = binary_thresholded(img)
+    undistorted_img = cv2.undistort(img, mtx, dist, None, mtx)
+    binary_thresh = binary_thresholded(undistorted_img)
     
     # Step 2: Warp the image (bird's-eye view)
-    binary_warped, Minv = warp(binary_thresh, mtx, dist)
+    binary_warped, Minv = warp(binary_thresh)
+
+    undistorted_warp, Minv = warp(undistorted_img)
+    
     
     # Step 3: Find lane pixels and fit to polynomials
     leftx, lefty, rightx, righty = find_lane_pixels_using_histogram(binary_warped)
     left_fit, right_fit, left_fitx, right_fitx, ploty = fit_poly(binary_warped, leftx, lefty, rightx, righty)
     
     # Step 4: Calculate the angle difference between the road centerline and the camera direction
-    angle_centerline_deg, centerline_slope, center_x = find_angle_difference(binary_warped, left_fit, right_fit)
+    angle_centerline_deg, angle_difference, center_x = find_angle_difference(binary_warped, left_fit, right_fit)
+    angle_difference *= -1
+    print('Angle difference:', angle_difference)
     
+    imgs = lane_finding_pipeline(undistorted_img, binary_warped, left_fit_hist, right_fit_hist, Minv)
+
     # Step 5: Draw arrows for the camera direction and centerline direction
-    img_with_arrows = draw_arrows_with_angle(img, center_x, angle_centerline_deg)
+    img_with_arrows = draw_arrows_with_angle(imgs, center_x, angle_centerline_deg)
     
-    return img_with_arrows, angle_centerline_deg
+
+    cv2.imshow('undistorted_warp', undistorted_warp)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    return img_with_arrows
